@@ -1,4 +1,5 @@
 """Executed inside the runtime image by CI, without dev packages or live credentials."""
+
 import asyncio
 import os
 
