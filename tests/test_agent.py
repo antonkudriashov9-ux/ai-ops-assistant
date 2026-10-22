@@ -1,6 +1,14 @@
 import pytest
-from app.schemas import IncidentAnalysisSchema
+
 from app.agent import IncidentAgent
+from app.config import settings
+from app.schemas import IncidentAnalysisSchema
+
+
+@pytest.fixture(autouse=True)
+def offline_mode(monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(settings, "ENABLE_MOCK_FALLBACK", True)
 
 
 @pytest.mark.asyncio
@@ -10,7 +18,7 @@ async def test_schema_valid_data():
         "severity": "critical",
         "affected_service": "linux_os",
         "summary": "Process was killed due to insufficient memory.",
-        "recommended_actions": ["Check dmesg", "Restart service with memory limits"]
+        "recommended_actions": ["Check dmesg", "Restart service with memory limits"],
     }
     schema = IncidentAnalysisSchema(**valid_data)
     assert schema.title == "Kernel OOM Killer"

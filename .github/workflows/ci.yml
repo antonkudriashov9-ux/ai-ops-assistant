@@ -1,32 +1,69 @@
-name: CI & Quality Checks
+name: CI & quality checks
 
 on:
   push:
-    branches: [ main, master ]
   pull_request:
-    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: aiops_test
+          POSTGRES_USER: aiops_test
+          POSTGRES_PASSWORD: ci-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aiops_test -d aiops_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_TEST_URL: postgresql+asyncpg://aiops_test:ci-test-only@localhost:5432/aiops_test
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Lint and format
+        run: |
+          python -m ruff check app tests
+          python -m ruff format --check app tests
+      - name: Test with SQLite and PostgreSQL
+        run: python -m pytest -v --cov=app --cov-report=term-missing
+      - name: Audit runtime dependencies
+        run: python -m pip_audit -r requirements.txt --disable-pip --no-deps --progress-spinner off
+      - name: Validate backup script
+        run: bash -n scripts/backup.sh && bash tests/test_backup.sh
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: Run Pytest
-      run: |
-        pytest tests/ -v
-
-    - name: Validate Dockerfile syntax
-      run: |
-        docker build -t ai-ops-assistant:ci .
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: |
+          cp .env.example .env
+          POSTGRES_PASSWORD=ci-test-only docker compose config --quiet
+      - name: Build runtime image
+        run: docker build --tag ai-ops-assistant:ci .
+      - name: Verify non-root read-only runtime, audit and demo
+        run: >-
+          docker run --rm -i --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m
+          --cap-drop ALL --security-opt no-new-privileges
+          --mount type=volume,src=aiops_ci_data,target=/app/data
+          --entrypoint python ai-ops-assistant:ci - < tests/container_smoke.py
