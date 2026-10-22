@@ -61,7 +61,9 @@ jobs:
           POSTGRES_PASSWORD=ci-test-only docker compose config --quiet
       - name: Build runtime image
         run: docker build --tag ai-ops-assistant:ci .
-      - name: Verify non-root runtime and imports
+      - name: Verify non-root read-only runtime, audit and demo
         run: >-
-          docker run --rm --entrypoint python ai-ops-assistant:ci
-          -c "import os; assert os.getuid() != 0; import app.main"
+          docker run --rm -i --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m
+          --cap-drop ALL --security-opt no-new-privileges
+          --mount type=volume,src=aiops_ci_data,target=/app/data
+          --entrypoint python ai-ops-assistant:ci - < tests/container_smoke.py
