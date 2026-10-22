@@ -1,0 +1,9 @@
+# Direct runtime dependencies. Regenerate requirements.txt using uv pip compile.
+aiogram==3.31.0
+openai==3.36.1
+pydantic==2.13.5
+pydantic-settings==2.16.1
+sqlalchemy[asyncio]==2.1.6
+asyncpg==0.32.0
+aiosqlite==0.22.1
+python-dotenv==1.2.4

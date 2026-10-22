@@ -1,34 +1,23 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Automated PostgreSQL Backup Script with 7-Day Retention
-# ==============================================================================
-
 set -euo pipefail
+umask 077
 
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/aiops}"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-CONTAINER_NAME="aiops_postgres"
-DB_NAME="${POSTGRES_DB:-aiops}"
-DB_USER="${POSTGRES_USER:-postgres}"
-BACKUP_FILE="${BACKUP_DIR}/${DB_NAME}_${TIMESTAMP}.sql.gz"
+PROJECT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+BACKUP_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups}"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+[[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] || { echo 'Invalid retention days' >&2; exit 1; }
+mkdir -p -- "$BACKUP_DIR"
+TIMESTAMP=$(date -u +'%Y%m%dT%H%M%SZ')
+TEMPORARY=$(mktemp "$BACKUP_DIR/.aiops-postgres-${TIMESTAMP}-XXXXXX")
+trap 'rm -f -- "$TEMPORARY"' EXIT
+NAME="${TEMPORARY##*/}"
+BACKUP_FILE="$BACKUP_DIR/${NAME#.}.sql.gz"
 
-mkdir -p "${BACKUP_DIR}"
-
-echo "[INFO] Starting database backup: ${DB_NAME} at ${TIMESTAMP}"
-
-# Dump and compress on the fly
-docker exec -t "${CONTAINER_NAME}" pg_dump -U "${DB_USER}" "${DB_NAME}" | gzip > "${BACKUP_FILE}"
-
-# Verify backup size > 0
-if [[ -s "${BACKUP_FILE}" ]]; then
-    echo "[SUCCESS] Backup created successfully: ${BACKUP_FILE} ($(du -h "${BACKUP_FILE}" | cut -f1))"
-else
-    echo "[ERROR] Backup file is empty!" >&2
-    exit 1
-fi
-
-# Rotate backups older than 7 days
-echo "[INFO] Removing backups older than 7 days..."
-find "${BACKUP_DIR}" -type f -name "*.sql.gz" -mtime +7 -delete
-
-echo "[INFO] Backup process completed."
+docker compose --project-directory "$PROJECT_ROOT" -f "$PROJECT_ROOT/docker-compose.yml" \
+  exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  | gzip > "$TEMPORARY"
+gzip -t -- "$TEMPORARY"
+[[ $(gzip -dc -- "$TEMPORARY" | wc -c) -gt 0 ]] || { echo 'Empty database dump' >&2; exit 1; }
+mv -- "$TEMPORARY" "$BACKUP_FILE"
+find "$BACKUP_DIR" -maxdepth 1 -type f -name 'aiops-postgres-*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
+printf 'Backup saved: %s\n' "$BACKUP_FILE"
